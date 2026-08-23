@@ -1,0 +1,190 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Timo Könnecke (moWerk) <mo@mowerk.net>
+#
+# wanze — take ONE sample, append it, exit.
+#
+# This is deliberately not a daemon. Nothing stays resident between samples,
+# so there is no loop to hold the CPU, no wakelock to leak and no process to
+# survive a bad update. The scheduling belongs to wanze.timer, which is set
+# NOT to wake the system: it fires only when the watch is awake anyway. That
+# is the whole design — the probe must be cheap enough to stay installed on a
+# watch somebody is wearing, and on a watch the cost is the wakeup, not the
+# read.
+#
+# Consequence: samples are irregular and there will be long gaps. That is a
+# feature. A gap means the watch genuinely slept through it, which is exactly
+# the standby behaviour we want to measure and exactly what a regular sampler
+# destroys by waking through it. Gap analysis happens on the host.
+
+set -u
+
+LOG=${WANZE_LOG:-/var/log/wanze.csv}
+SCHEMA=2
+# Bounded so a watch left undocked for months cannot fill the rootfs. Trimming
+# is hysteretic — trim well below the cap so it happens rarely, since a rewrite
+# costs far more than an append.
+MAX_ROWS=${WANZE_MAX_ROWS:-20000}
+KEEP_ROWS=${WANZE_KEEP_ROWS:-15000}
+
+HEADER="epoch,uptime,current_ua,capacity,status,voltage_uv,temp,charger,backlight,panel_power_state,cpu_online,cpu_freq,load1,suspend_success,suspend_fail,wakeup_source,reason,gauge,schema"
+
+# Read a sysfs file, or print nothing. Every field is optional: watches differ,
+# and a missing field must cost one empty column, never the sample.
+r() { [ -r "$1" ] && cat "$1" 2>/dev/null | head -1 | tr -d ',\r\n' || true; }
+
+# The gauge is resolved by NAME, in the same preference order asteroid-docking-bay
+# uses, so wanze's numbers are comparable with the Control Center's. Picking
+# whichever node a glob sorts first is a known way to read a different sensor on
+# every watch.
+BATD=""
+for d in /sys/class/power_supply/nanohub_fuelgauge-* \
+         /sys/class/power_supply/battery \
+         /sys/class/power_supply/Battery \
+         /sys/class/power_supply/max170xx_battery; do
+    [ -d "$d" ] && BATD="$d" && break
+done
+
+# Charger presence: the first supply that is not the battery and reports online.
+CHARGER=""
+for d in /sys/class/power_supply/*; do
+    [ -d "$d" ] || continue
+    [ "$d" = "$BATD" ] && continue
+    o=$(r "$d/online")
+    [ -n "$o" ] && CHARGER="$o" && [ "$o" = "1" ] && break
+done
+
+# Screen proxy. Resolved BY NAME in a preference order, exactly like BATD above
+# and for the same reason: the node differs per watch, and taking whichever one
+# a glob sorts first reads a different sensor on every device.
+#
+# nemo and catfish carry the panel on the LED class and have no
+# /sys/class/backlight at all. sol is the other way round: it has no LED-class
+# backlight, and mce writes /sys/class/backlight/panel0-backlight/brightness.
+# Reading only the first of those left the column empty for every row on sol,
+# which analyse() reported as "screen never on" when it meant "this path does
+# not exist here" — a silent zero, which is the worst kind of wrong.
+BACKLIGHT=""
+for f in /sys/class/leds/lcd-backlight/brightness \
+         /sys/class/backlight/panel0-backlight/brightness \
+         /sys/class/backlight/*/brightness; do
+    [ -r "$f" ] && BACKLIGHT=$(r "$f") && break
+done
+
+# Display STATE, alongside brightness rather than instead of it. Brightness
+# alone cannot separate a cheap always-on watchface (LP@30Hz) from an expensive
+# lit screen (ON/HBM) — both report non-zero — and that is exactly the
+# distinction a drain trace turns on.
+PANEL=""
+for f in /sys/devices/platform/soc/*mdss_mdp/drm/card0/sde-conn-*/panel_power_state \
+         /sys/class/drm/card0-*/panel_power_state; do
+    [ -r "$f" ] && PANEL=$(r "$f") && break
+done
+
+# The kernel's own suspend counters — two reads, and they answer what gap
+# analysis cannot. A gap only says "the probe did not fire, so the watch was
+# PROBABLY asleep". These separate three cases that otherwise look identical:
+#   success climbing       -> it really slept
+#   success flat, fail>0   -> it tried and something aborted it
+#   success=0 AND fail=0   -> suspend was never even ATTEMPTED
+# The last is the diagnosis a wrist run needed and could not get, because the
+# live counters die with the battery. Recorded per sample, they survive it.
+SUSPEND_OK=$(r /sys/power/suspend_stats/success)
+SUSPEND_FAIL=$(r /sys/power/suspend_stats/fail)
+
+# Which wakelock held the watch up. OFF by default: this needs debugfs and is a
+# far pricier read than the sysfs ones above.
+#
+# PARSING HAZARD — read this before touching the awk. /sys/kernel/debug/
+# wakeup_sources puts a DOUBLE TAB after `name`, so a naive $9 is last_change,
+# NOT prevent_suspend_time. Splitting on "\t+" collapses that run: field 6 is
+# active_since and field 10 is prevent_suspend_time. Mis-parsing this produced
+# two confidently-wrong, later-withdrawn conclusions in the AsteroidOS notes;
+# it must not bite a third time.
+WAKEUP_SRC=""
+if [ "${WANZE_WAKEUP_SOURCES:-0}" = "1" ] && [ -r /sys/kernel/debug/wakeup_sources ]; then
+    WAKEUP_SRC=$(awk -F"\t+" 'NR>1 && $10+0>m {m=$10+0; n=$1} END{if(m>0)print n}' \
+        /sys/kernel/debug/wakeup_sources 2>/dev/null | tr -d ',\r\n')
+fi
+
+# How many cores are actually online — the axis a drain figure needs to be
+# attributable. "0-3" means four, "0" means one, "0,2-3" means three.
+ONLINE_RAW=$(r /sys/devices/system/cpu/online)
+CPU_ONLINE=$(echo "$ONLINE_RAW" | awk -F, '{n=0; for(i=1;i<=NF;i++){
+    if (split($i,p,"-")==2) n+=p[2]-p[1]+1; else n+=1 } print n}')
+
+EPOCH=$(date +%s 2>/dev/null)
+# Field 1 of /proc/uptime. A DROP between two samples means the watch rebooted,
+# which makes reboot forensics fall out of the trace for free.
+UPTIME=$(cut -d' ' -f1 /proc/uptime 2>/dev/null)
+LOAD1=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)
+FREQ=$(r /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq)
+
+# Start (or restart) the file whenever the schema changes, so a column shift can
+# never be mistaken for a behaviour change.
+if [ ! -f "$LOG" ] || [ "$(head -1 "$LOG" 2>/dev/null)" != "$HEADER" ]; then
+    printf '%s\n' "$HEADER" > "$LOG" 2>/dev/null || exit 0
+fi
+
+CAPACITY=$(r "$BATD/capacity")
+
+# A final marker row, once, when capacity first crosses the low threshold.
+# Without it a trace that ends because the battery died and one that ends
+# because the watch slept and never woke are indistinguishable — both are just
+# a trailing gap. The stamp file is what makes it once-per-descent, and it is
+# cleared again above the threshold so a recharged watch re-arms.
+LOWBAT=${WANZE_SYNC_BELOW:-15}
+STAMP="$LOG.lowbat"
+REASON=""
+if [ -n "$CAPACITY" ] && [ "$CAPACITY" -le "$LOWBAT" ] 2>/dev/null; then
+    [ -f "$STAMP" ] || { REASON="lowbat"; : > "$STAMP" 2>/dev/null; }
+elif [ -f "$STAMP" ]; then
+    rm -f "$STAMP" 2>/dev/null
+fi
+
+printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+    "$EPOCH" "$UPTIME" \
+    "$(r "$BATD/current_now")" "$CAPACITY" "$(r "$BATD/status")" \
+    "$(r "$BATD/voltage_now")" "$(r "$BATD/temp")" \
+    "$CHARGER" "$BACKLIGHT" "$PANEL" "$CPU_ONLINE" "$FREQ" "$LOAD1" \
+    "$SUSPEND_OK" "$SUSPEND_FAIL" "$WAKEUP_SRC" "$REASON" \
+    "$(basename "${BATD:-none}")" "$SCHEMA" >> "$LOG" 2>/dev/null || exit 0
+
+# Below the threshold, force the rows to disk. A hard power cut loses whatever
+# is still in page cache — which is exactly the rows near death, the ones the
+# whole trace was taken for. A healthy watch never reaches this line, so it
+# pays nothing for the protection.
+if [ -n "$CAPACITY" ] && [ "$CAPACITY" -le "$LOWBAT" ] 2>/dev/null; then
+    sync 2>/dev/null || true
+fi
+
+# Opt-in upload of the watch's own trace to its owner's own machine. OFF unless
+# WANZE_UPLOAD_TO is set, and even then it only rides a network link that
+# ALREADY exists: never scan, never associate, never wake. If the link is not
+# up, do nothing and try again next sample — the whole premise of this probe is
+# that it costs the watch nothing it was not already spending.
+#
+# This is the same file `wanze harvest` copies over USB; uploading it merely
+# saves the trip to the cradle, and matters most for a watch that may run flat
+# before it gets there.
+if [ -n "${WANZE_UPLOAD_TO:-}" ] && ip route show default 2>/dev/null | grep -q .; then
+    case "$WANZE_UPLOAD_TO" in
+        http://*|https://*)
+            command -v curl >/dev/null 2>&1 && \
+                curl -m 10 -sS -X POST --data-binary "@$LOG" "$WANZE_UPLOAD_TO" \
+                    >/dev/null 2>&1 || true ;;
+        *)
+            command -v scp >/dev/null 2>&1 && \
+                scp -o ConnectTimeout=5 -o BatchMode=yes -q "$LOG" "$WANZE_UPLOAD_TO" \
+                    >/dev/null 2>&1 || true ;;
+    esac
+fi
+
+# Ring-trim. Keeping the header is what makes the trimmed file still parseable.
+rows=$(wc -l < "$LOG" 2>/dev/null || echo 0)
+if [ "$rows" -gt "$MAX_ROWS" ]; then
+    { printf '%s\n' "$HEADER"; tail -n "$KEEP_ROWS" "$LOG"; } > "$LOG.tmp" 2>/dev/null \
+        && mv "$LOG.tmp" "$LOG"
+fi
+
+exit 0

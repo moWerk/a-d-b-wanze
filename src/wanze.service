@@ -1,0 +1,20 @@
+[Unit]
+Description=wanze sample
+Documentation=https://github.com/moWerk/wanze
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/wanze-sample
+
+# Never compete with anything the wearer can see. The sampler is a handful of
+# sysfs reads and one append; if it has to wait behind real work, waiting is
+# the correct outcome.
+Nice=19
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+
+# A sampler that hangs must not become a resident process — the failure mode
+# this design exists to avoid. /sys/power/wakeup_count, for one, BLOCKS until
+# the kernel can capture the count; it hung a probe during development and is
+# deliberately never read, but the timeout is the belt to that braces.
+TimeoutStartSec=30

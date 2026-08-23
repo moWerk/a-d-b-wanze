@@ -1,0 +1,28 @@
+[Unit]
+Description=wanze — opportunistic watch telemetry
+Documentation=https://github.com/moWerk/wanze
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+# THE line that makes this safe to wear. WakeSystem=false (systemd's default,
+# stated here because it is the entire design rather than an incidental) means
+# the timer arms no RTC alarm: it does not pull the watch out of suspend. It
+# fires when the watch is already awake, or on the next wake after the interval
+# has passed. A probe that woke the CPU to record battery state would be
+# draining the battery it was measuring.
+WakeSystem=false
+
+# Deliberately sloppy. A large accuracy window lets systemd coalesce this
+# firing with wakeups that were going to happen anyway, which is the cheapest
+# a periodic job can be. Precision buys nothing here — the host reconstructs
+# timing from the recorded epoch, not from the schedule.
+AccuracySec=5min
+
+# One catch-up sample after a long sleep, not a burst backfilling every missed
+# interval — the gap itself is the information, so there is nothing to backfill.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

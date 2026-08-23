@@ -1,11 +1,45 @@
-# wanze
+# a-d-b-wanze
 
-**A telemetry probe for [AsteroidOS](https://asteroidos.org/) watches that
-records while nobody is watching.**
+**A battery-life and sleep-behaviour probe for [AsteroidOS](https://asteroidos.org/)
+watches — a porting instrument, for measuring your own hardware.**
 
 Install it and forget it. wanze sits on the watch, takes a sample whenever the
-watch happens to be awake, and hands the whole trace over the next time the
-watch is docked. It is cheap enough to leave on a watch you are wearing.
+watch happens to be awake anyway, and hands the whole trace over the next time
+the watch is docked. It is cheap enough to leave on a watch you are wearing,
+which is the only way to find out what that watch does all day.
+
+## Scope — what it is for, and what it will not do
+
+wanze is a **porting and development instrument**. It exists to answer one
+class of question about a device you are bringing AsteroidOS up on: *why does
+this watch drain, and does it ever actually sleep?* Neither question can be
+answered at the dock, because a docked watch is charging and awake. They have
+to be measured on the watch, undocked, while it is doing nothing — which is
+exactly when no debugger is attached and nobody is looking at it.
+
+It records **device and kernel telemetry only**. The CSV header is the complete
+list; there is nothing else in it:
+
+- the battery — current, capacity, voltage, temperature, charger presence
+- the screen — backlight brightness and the panel's own power state
+- the kernel's suspend counters, and optionally the name of the wakeup source
+- CPU cores online, CPU frequency, 1-minute load average
+- `/proc/uptime`, and the wall clock as an anchor
+
+It reads **no sensors**: no accelerometer, no heart rate, no microphone, no
+location. It reads **no user content**: no notifications, messages, contacts,
+calendar entries, app data or screen contents. It does no network scanning and
+identifies nobody. Every column is a property of the hardware and the kernel —
+there is no column that is about a person.
+
+The trace stays on the watch until you fetch it over USB at the cradle. Network
+upload is **off by default**, and when you switch it on it goes to an address
+you set yourself (`WANZE_UPLOAD_TO`) — normally your own laptop.
+
+It is meant to be installed by the owner of a watch, on that owner's own watch,
+and it does not hide. `/usr/bin/wanze-sample`, `/etc/systemd/system/wanze.timer`
+and `/var/log/wanze.csv` are ordinary paths under their own names, `systemctl
+list-timers` shows it, and `systemctl disable --now wanze.timer` ends it.
 
 ## The name
 
@@ -13,6 +47,10 @@ watch is docked. It is cheap enough to leave on a watch you are wearing.
 English collapses those two with "defect", which is why `bug` would be an
 unusable package name and `wanze` is not: nobody has to wonder what "the bug is
 reporting correctly" means.
+
+The repository carries the `a-d-b-` prefix of its host tool,
+[asteroid-docking-bay](https://github.com/moWerk/asteroid-docking-bay), so that
+the scope travels with the name. A pun should not have to be explained twice.
 
 The metaphor turned out tighter than intended, because **host** does double
 duty. A bedbug lives in the furniture, feeds unnoticed while you sleep, and is
@@ -56,7 +94,7 @@ clock** — see below for why that is not a stylistic preference.
 
 ## What it records
 
-One CSV row per sample, in `/var/log/wanze.csv`:
+One CSV row per sample, in `/var/log/wanze.csv`. Schema 2:
 
 | column | |
 |---|---|
@@ -64,10 +102,17 @@ One CSV row per sample, in `/var/log/wanze.csv`:
 | `uptime` | the timing source; a **drop** between rows is a reboot |
 | `current_ua`, `capacity`, `status`, `voltage_uv`, `temp` | the battery |
 | `charger` | whether anything is feeding it |
-| `backlight` | screen-on proxy, so drain becomes attributable |
+| `backlight` | screen-on proxy, resolved per watch, so drain becomes attributable |
+| `panel_power_state` | what the panel itself says — the ground truth `backlight` only approximates |
 | `cpu_online`, `cpu_freq`, `load1` | what the watch was doing |
+| `suspend_success`, `suspend_fail` | the kernel's own suspend counters; both flat means suspend was never attempted |
+| `wakeup_source` | what woke it, when `WANZE_WAKEUP_SOURCES=1` — off by default |
+| `reason` | why this row exists, when it was not the ordinary timer |
 | `gauge` | which power-supply node was read, **by name** |
 | `schema` | so a column change can never be read as a behaviour change |
+
+A column the watch does not offer is reported as **unavailable**, never as `0`.
+A missing instrument and a measured zero are different findings.
 
 The buffer is a bounded ring, trimmed with hysteresis so a watch left undocked
 for months cannot fill the rootfs, and so the rewrite happens rarely.
@@ -101,8 +146,13 @@ install -m644 src/wanze.service src/wanze.timer /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now wanze.timer
 ```
 
+To remove it: `systemctl disable --now wanze.timer`, then delete those three
+files and `/var/log/wanze.csv`.
+
+`packaging/wanze.bb` builds the same thing as an ipk for an AsteroidOS image.
+
 [asteroid-docking-bay](https://github.com/moWerk/asteroid-docking-bay) can do
-this, harvest the trace and read it back — `asteroid_docking_bay/wanze.py`.
+the install, harvest the trace and read it back — `asteroid_docking_bay/wanze.py`.
 
 ## Reading a trace honestly
 
@@ -114,6 +164,10 @@ this, harvest the trace and read it back — `asteroid_docking_bay/wanze.py`.
 - **Readings are noisy.** A few minutes is not a measurement.
 - **A gap is sleep, a negative uptime step is a reboot.** Never compute elapsed
   time across the latter.
+- **`display_on_fraction` means nothing without `asleep_fraction`.** The timer
+  never wakes the watch, so a watch whose screen never turns off is also a watch
+  that never slept, and it has no gaps to show for it. The pair is the
+  diagnosis; either number alone is not.
 
 ## Status
 

@@ -10,10 +10,11 @@
 # Note the last line: `devtool build` stops after do_packagedata, reports
 # success, and writes no package at all.
 
-SUMMARY = "Opportunistic telemetry probe for AsteroidOS watches"
-DESCRIPTION = "Samples battery, screen and CPU state whenever the watch is \
-already awake, so a watch can be measured while undocked without the probe \
-waking it. The trace is harvested at the dock."
+SUMMARY = "Battery and sleep-behaviour probe for AsteroidOS porting"
+DESCRIPTION = "Records battery, screen, suspend and CPU state whenever the \
+watch is already awake, so a watch can be measured while undocked without the \
+probe waking it and skewing the result. Device and kernel telemetry only: no \
+sensors, no user content. The trace is harvested at the dock."
 HOMEPAGE = "https://github.com/moWerk/a-d-b-wanze"
 # Set explicitly: without it the distro-wide default lands in the ipk's
 # control file and misattributes the package to another maintainer.

@@ -1,5 +1,5 @@
 [Unit]
-Description=wanze — opportunistic watch telemetry
+Description=wanze — battery and sleep-behaviour sampling (never wakes the watch)
 Documentation=https://github.com/moWerk/a-d-b-wanze
 
 [Timer]

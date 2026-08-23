@@ -1,6 +1,6 @@
 [Unit]
 Description=wanze sample
-Documentation=https://github.com/moWerk/wanze
+Documentation=https://github.com/moWerk/a-d-b-wanze
 
 [Service]
 Type=oneshot

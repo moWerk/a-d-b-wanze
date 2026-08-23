@@ -3,7 +3,7 @@
 #
 # Reference recipe. Build against a checkout of this repo:
 #
-#     devtool add wanze /path/to/wanze
+#     devtool add wanze /path/to/a-d-b-wanze
 #     devtool build wanze
 #     bitbake -c package_write_ipk wanze
 #
@@ -14,7 +14,7 @@ SUMMARY = "Opportunistic telemetry probe for AsteroidOS watches"
 DESCRIPTION = "Samples battery, screen and CPU state whenever the watch is \
 already awake, so a watch can be measured while undocked without the probe \
 waking it. The trace is harvested at the dock."
-HOMEPAGE = "https://github.com/moWerk/wanze"
+HOMEPAGE = "https://github.com/moWerk/a-d-b-wanze"
 # Set explicitly: without it the distro-wide default lands in the ipk's
 # control file and misattributes the package to another maintainer.
 MAINTAINER = "Timo Könnecke (moWerk) <mo@mowerk.net>"

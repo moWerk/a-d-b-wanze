@@ -1,6 +1,6 @@
 [Unit]
 Description=wanze — opportunistic watch telemetry
-Documentation=https://github.com/moWerk/wanze
+Documentation=https://github.com/moWerk/a-d-b-wanze
 
 [Timer]
 OnBootSec=2min

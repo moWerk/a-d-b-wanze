@@ -103,7 +103,24 @@ SUSPEND_FAIL=$(r /sys/power/suspend_stats/fail)
 # it must not bite a third time.
 WAKEUP_SRC=""
 if [ "${WANZE_WAKEUP_SOURCES:-0}" = "1" ] && [ -r /sys/kernel/debug/wakeup_sources ]; then
-    WAKEUP_SRC=$(awk -F"\t+" 'NR>1 && $10+0>m {m=$10+0; n=$1} END{if(m>0)print n}' \
+    # Two things the obvious one-liner gets wrong, both found on real devices.
+    #
+    # `deleted` is not a wakeup source. The kernel keeps one aggregate row by
+    # that name and folds every UNREGISTERED source into it, so its
+    # prevent_suspend_time only ever grows and on a long-running device it
+    # eventually beats every live source. It then wins this comparison for
+    # ever and the column reports "deleted" on every row, which names nothing
+    # and hides the holder that is actually blocking suspend. Reported by the
+    # sailfishos session from an F(x)tec Pro1-X on mainline 7.3, where it had
+    # already taken the lead; confirmed present on a Sony XA2 on hybris 4.4
+    # too, at 0, so this is latent on the watches rather than absent.
+    #
+    # The name field is PADDED to a fixed width, so it arrives with trailing
+    # blanks and was written into the csv that way ("a800000.ssusb       ").
+    WAKEUP_SRC=$(awk -F"\t+" 'NR>1 {
+            name=$1; sub(/[ \t]+$/, "", name)
+            if (name != "deleted" && $10+0 > m) { m=$10+0; n=name }
+        } END { if (m>0) print n }' \
         /sys/kernel/debug/wakeup_sources 2>/dev/null | tr -d ',\r\n')
 fi
 

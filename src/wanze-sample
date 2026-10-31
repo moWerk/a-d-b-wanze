@@ -159,6 +159,39 @@ elif [ -f "$STAMP" ]; then
     rm -f "$STAMP" 2>/dev/null
 fi
 
+# One wake, one row. systemd 238 fires this unit TWICE on the wake after a
+# long sleep, 0.3 s apart, and that is not a slot-by-slot catch-up: measured on
+# an F(x)tec Pro1-X on 2026-10-31, two missed slots produced two rows and three
+# missed slots also produced two. Whatever 238 is doing on resume, the extra
+# activation is an artefact of the wake rather than an observation of anything.
+#
+# Guarded here rather than diagnosed in systemd, because the guard is correct
+# regardless of the cause or the version, and because a duplicate is not merely
+# untidy: every count the host reports (samples, samples_screen_on,
+# panel_state_counts) is inflated by it, and the gap it sits next to is the
+# measurement this probe exists to produce. Time-weighted figures survive a
+# duplicate -- the pair is 0.3 s wide -- but the counts do not.
+#
+# Two things always write anyway. A NEGATIVE delta means the watch rebooted and
+# uptime restarted, which is a new boot and never a duplicate. A different
+# `reason` means a deliberate marker row (lowbat) that says something the
+# previous row does not, so it is never suppressed by proximity.
+#
+# Fields by position from BOTH ends on purpose: uptime is $2, before any field
+# that could contain a comma, and reason is $(NF-2), after all of them.
+MIN_SPACING=${WANZE_MIN_SPACING:-30}
+LASTROW=$(tail -n 1 "$LOG" 2>/dev/null)
+case "$LASTROW" in
+    ""|epoch,*) ;;      # header only, or empty: nothing to be a duplicate of
+    *)
+        printf '%s\n' "$LASTROW" | awk -F, \
+            -v now="$UPTIME" -v minsp="$MIN_SPACING" -v reason="$REASON" \
+            '{ d = now - $2
+               if (d >= 0 && d < minsp && $(NF-2) == reason) exit 0
+               exit 1 }' && exit 0
+        ;;
+esac
+
 printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$EPOCH" "$UPTIME" \
     "$(r "$BATD/current_now")" "$CAPACITY" "$(r "$BATD/status")" \

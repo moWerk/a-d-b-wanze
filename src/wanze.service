@@ -18,3 +18,16 @@ CPUSchedulingPolicy=idle
 # the kernel can capture the count; it hung a probe during development and is
 # deliberately never read, but the timeout is the belt to that braces.
 TimeoutStartSec=30
+
+# Enabled in its OWN right, not only as the timer's payload, so every boot
+# writes one row. That row brackets the boot and is the only sample guaranteed
+# to exist on a watch that sleeps through every calendar slot of a short
+# session.
+#
+# This used to be unsafe and is not any more. While the timer chained with
+# OnUnitActiveSec=, the service's activation WAS the schedule, so starting it
+# at boot seeded a chain that a suspend could then lose — the recipe said so,
+# and said the service must never be enabled alone. The timer is now realtime
+# and independent of when the service last ran, so the two no longer interact.
+[Install]
+WantedBy=multi-user.target

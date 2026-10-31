@@ -28,9 +28,16 @@ SRC_URI = ""
 # the probe has to be defensible as something you leave on a worn watch.
 inherit systemd allarch
 
-SYSTEMD_SERVICE:${PN} = "wanze.timer"
-# The timer is what gets enabled; the service is triggered by it and must not
-# be enabled on its own, or it would run once at boot and never again.
+# BOTH units are enabled, and the comment here used to say the opposite.
+#
+# While the timer chained with OnUnitActiveSec=, the service's activation was
+# the schedule, so enabling the service alone really would have run it once at
+# boot and never again. The timer is realtime now (OnCalendar=*:0/5) and does
+# not depend on when the service last ran, so the two are independent: the
+# timer keeps the 5-minute cadence and the service contributes the boot row,
+# which on a watch that sleeps through every slot of a short session is the
+# only sample guaranteed to exist.
+SYSTEMD_SERVICE:${PN} = "wanze.timer wanze.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 do_install() {

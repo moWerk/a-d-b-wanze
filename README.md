@@ -72,9 +72,25 @@ battery it claims to measure.
 So wanze is not a daemon. It is a `systemd` timer with **`WakeSystem=false`**,
 firing a `Type=oneshot` service that appends one line and exits. Such a timer
 arms no RTC alarm: it fires when the watch is already awake, or on the next
-wake after the interval has passed. `AccuracySec` is deliberately sloppy
+wake after a scheduled slot has passed. `AccuracySec` is deliberately sloppy
 (5 minutes) so systemd can coalesce the firing with wakeups that were going to
 happen anyway.
+
+The schedule is a **realtime** `OnCalendar=*:0/5`, and that is not an
+arbitrary choice. systemd's monotonic timers (`OnUnitActiveSec=` and friends)
+run on a clock that pauses in suspend, so a 5-minute monotonic interval means
+every 5 *awake* minutes. On a watch that sleeps well — the whole point of
+measuring — that is barely any samples at all: wanze shipped this way, and on
+a phone sleeping 94% of a 39-minute window it recorded one row and then
+nothing. A realtime clock keeps running while the watch sleeps, and systemd
+guarantees that a calendar slot which passed repeatedly during one sleep
+produces a *single* activation on the next wake. That is exactly the wanted
+behaviour: one catch-up sample, never a burst backfilling the gap.
+
+`WakeSystem=false` is what keeps the realtime clock safe to use here. With it
+enabled, a calendar slot elapsing during suspend would *wake the watch* — which
+would make wanze the thing it was built not to be. The clock changed; the
+promise did not.
 
 Nothing is resident between samples. There is no loop to hold the CPU, no
 wakelock to leak, and no process to survive a bad update.

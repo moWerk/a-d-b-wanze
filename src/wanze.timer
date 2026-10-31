@@ -3,25 +3,54 @@ Description=wanze — battery and sleep-behaviour sampling (never wakes the watc
 Documentation=https://github.com/moWerk/a-d-b-wanze
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
+# REALTIME, not monotonic, and that is the whole point of this line.
+#
+# This was OnBootSec=2min + OnUnitActiveSec=5min, which is wrong for the one
+# thing wanze exists to measure. systemd.timer, on monotonic timers: "If the
+# computer is temporarily suspended, the monotonic clock generally pauses,
+# too." So "every 5 minutes" meant every 5 AWAKE minutes. The better a watch
+# sleeps, the less wanze records — and a watch that sleeps well is exactly the
+# one whose trace is supposed to show it.
+#
+# Measured on an F(x)tec Pro1-X by the sailfishos session, 2026-10-31: in 2339
+# seconds of boottime the monotonic clock advanced 146 seconds, because the
+# phone slept 94% of the window. One sample every 5 monotonic minutes is one
+# sample per 2.5 hours of real time, and after the boot row it recorded nothing
+# at all for 40 minutes. The find is theirs, including the measurement that
+# separated this from the other defect it was hiding behind.
+#
+# A realtime calendar timer does not pause in suspend, and its documented
+# behaviour is already what wanze wants: a timer that "elapsed more than once
+# while the system was continuously sleeping ... will only result in a single
+# service activation". One catch-up sample on the next wake, never a burst
+# backfilling the gap — and the gap is the measurement, so there is nothing to
+# backfill.
+OnCalendar=*:0/5
 
 # THE line that makes this safe to wear. WakeSystem=false (systemd's default,
 # stated here because it is the entire design rather than an incidental) means
 # the timer arms no RTC alarm: it does not pull the watch out of suspend. It
-# fires when the watch is already awake, or on the next wake after the interval
-# has passed. A probe that woke the CPU to record battery state would be
-# draining the battery it was measuring.
+# fires when the watch is already awake, or on the next wake after a slot has
+# passed. A probe that woke the CPU to record battery state would be draining
+# the battery it was measuring.
+#
+# It is also what keeps the switch to a calendar timer safe. The same man page
+# notes that WITH WakeSystem= enabled "a calendar time event elapsing while the
+# system is suspended will cause the system to wake up" — which would turn
+# wanze into the thing it was built not to be. The clock changed; the promise
+# did not.
 WakeSystem=false
 
 # Deliberately sloppy. A large accuracy window lets systemd coalesce this
-# firing with wakeups that were going to happen anyway, which is the cheapest
-# a periodic job can be. Precision buys nothing here — the host reconstructs
+# firing with wakeups that were going to happen anyway, which is the cheapest a
+# periodic job can be. Precision buys nothing here — the host reconstructs
 # timing from the recorded epoch, not from the schedule.
 AccuracySec=5min
 
-# One catch-up sample after a long sleep, not a burst backfilling every missed
-# interval — the gap itself is the information, so there is nothing to backfill.
+# Only about slots missed while the watch was powered OFF, which is a different
+# question from slots missed while it slept (handled above, by the calendar
+# timer's own semantics). Nothing is backfilled across an off period either:
+# the boot sample comes from wanze.service being enabled in its own right.
 Persistent=false
 
 [Install]
